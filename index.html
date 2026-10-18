@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>HERRACOM · Verificación biométrica</title>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+:root{--orange:#f47721;--deep:#c74e06;--ink:#232629;--muted:#66707a;--line:#e1e5e8;--ok:#147a52;--bad:#b82d3b}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:"Segoe UI",Arial,sans-serif;background:#f2f4f6;color:var(--ink)}
+body{padding:18px}.app{max-width:620px;margin:auto;background:white;border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:0 24px 70px #17233120}
+.top{height:7px;background:linear-gradient(90deg,var(--orange),#ff9a4b 72%,#343a40 72%)}
+header{padding:18px 22px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}
+.brand{font-size:22px;font-weight:950;color:var(--orange)}.brand span{font-size:11px;color:#66707a;letter-spacing:1.5px;margin-left:8px}.secure{font-size:10px;font-weight:800;color:var(--ok);background:#e9f7f0;padding:5px 8px;border-radius:999px}
+main{padding:20px}.intro{padding:14px;border:1px solid #ffe0c7;background:#fff7f0;border-radius:14px;margin-bottom:15px}.intro b{color:#9b470d}.intro p{margin:5px 0 0;font-size:12px;color:#6a543f;line-height:1.45}
+.camera{position:relative;aspect-ratio:4/3;background:radial-gradient(ellipse at top,#3a4149,#151a1f);border-radius:18px;overflow:hidden;display:grid;place-items:center}
+video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}.overlay{position:absolute;inset:0;pointer-events:none;display:grid;place-items:center}.oval{width:58%;height:77%;border:3px solid #ffffffcc;border-radius:48% 48% 45% 45%;box-shadow:0 0 0 999px #00000022}
+.status{margin:14px 0;padding:12px 14px;border-radius:12px;background:#f4f6f8;font-size:12px;line-height:1.45;color:#505a64}.status.ok{background:#eaf7f0;color:#126444}.status.bad{background:#fde9ec;color:#a52635}.status.warn{background:#fff1db;color:#8b5700}
+.progress{height:7px;background:#e4e8eb;border-radius:99px;overflow:hidden;margin-top:9px}.progress span{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb06b,var(--orange));transition:width .25s}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.btn{min-height:48px;border:0;border-radius:12px;font-weight:850;font-size:14px;cursor:pointer}.btn.main{background:linear-gradient(#ff963f,var(--orange));color:#251506;box-shadow:0 4px 0 #c6540d}.btn.soft{background:#fff;border:1px solid #d8dde1;color:#343a40}.btn:disabled{opacity:.55;cursor:wait}.gps{display:flex;gap:7px;align-items:center;margin-top:10px;font-size:11px;color:var(--muted)}
+footer{padding:12px 20px;border-top:1px solid var(--line);font-size:10px;color:#8a929a;text-align:center}
+@media(max-width:520px){body{padding:0;background:white}.app{min-height:100vh;border:0;border-radius:0;box-shadow:none}.brand{font-size:19px}.brand span{display:block;margin:2px 0 0}.camera{aspect-ratio:3/4;max-height:62vh}.actions{grid-template-columns:1fr}main{padding:15px}.oval{width:68%;height:68%}}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="top"></div>
+<header><div class="brand">HERRACOM <span>BIOMETRÍA RRHH</span></div><span class="secure">● sesión segura</span></header>
+<main>
+  <div class="intro"><b id="title">Verificación facial</b><p>Necesitamos acceso a tu cámara y ubicación GPS. Los permisos los concede directamente el navegador. La plantilla facial se procesa para verificar tu identidad.</p></div>
+  <div class="camera"><video id="video" autoplay playsinline muted></video><div class="overlay"><div class="oval"></div></div></div>
+  <div id="status" class="status warn">Pulsa “Conceder permisos” para comenzar.</div>
+  <div class="progress"><span id="progress"></span></div>
+  <div class="gps" id="gpsState">⌖ GPS pendiente</div>
+  <div class="actions"><button id="permit" class="btn main">Conceder cámara + GPS</button><button id="cancel" class="btn soft">Cancelar</button></div>
+  <canvas id="canvas" hidden></canvas>
+</main>
+<footer>Jorge Luis Guerra Depaz · Creador del Sistema RRHH · HERRACOM</footer>
+</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id); const qs=new URLSearchParams(location.search);
+const MODE=qs.get('mode')==='enroll'?'enroll':'verify'; const TARGET_ORIGIN=qs.get('origin')||'*';
+const MODEL='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+let stream=null,gpsData=null,modelsReady=false,busy=false;
+$('title').textContent=MODE==='enroll'?'Registro biométrico facial':'Verificación biométrica facial';
+function setStatus(msg,type='warn',pct){$('status').textContent=msg;$('status').className='status '+type;if(pct!=null)$('progress').style.width=Math.max(0,Math.min(100,pct))+'%'}
+async function loadModels(){if(modelsReady)return;setStatus('Cargando motor biométrico…','warn',8);await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(MODEL),faceapi.nets.faceLandmark68Net.loadFromUri(MODEL),faceapi.nets.faceRecognitionNet.loadFromUri(MODEL)]);modelsReady=true;setStatus('Motor biométrico listo. Solicitando permisos…','warn',18)}
+function getGps(){return new Promise((res,rej)=>{if(!navigator.geolocation)return rej(Error('Este dispositivo no admite ubicación GPS.'));navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lng:p.coords.longitude,precision:p.coords.accuracy}),e=>rej(Error(e.code===1?'Permiso de ubicación denegado. Actívalo y vuelve a intentar.':'No se pudo obtener la ubicación GPS.')), {enableHighAccuracy:true,timeout:20000,maximumAge:0})})}
+async function openCamera(){if(!navigator.mediaDevices?.getUserMedia)throw Error('Este navegador no permite cámara. Usa Chrome, Edge o Safari actualizado.');try{return await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},width:{ideal:960},height:{ideal:720}},audio:false})}catch(e){return await navigator.mediaDevices.getUserMedia({video:true,audio:false})}}
+function avgPoint(points){return points.reduce((a,p)=>({x:a.x+p.x,y:a.y+p.y}),{x:0,y:0});}
+function yawRatio(land){const le=avgPoint(land.getLeftEye()),re=avgPoint(land.getRightEye()),nose=land.getNose();le.x/=6;le.y/=6;re.x/=6;re.y/=6;const n=nose[Math.min(3,nose.length-1)];const mid=(le.x+re.x)/2,eye=Math.max(1,Math.abs(re.x-le.x));return (n.x-mid)/eye}
+async function detectOne(){const opts=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.5});const all=await faceapi.detectAllFaces($('video'),opts).withFaceLandmarks().withFaceDescriptors();if(all.length!==1)throw Error(all.length?'Debe aparecer una sola persona frente a la cámara.':'No se detecta un rostro. Acércate, mira al frente y mejora la iluminación.');return all[0]}
+function wait(ms){return new Promise(r=>setTimeout(r,ms))}
+async function liveness(){setStatus('Mira al frente y mantén el rostro dentro del óvalo…','warn',35);let base=[];for(let i=0;i<5;i++){const d=await detectOne();base.push(yawRatio(d.landmarks));await wait(170)}const baseline=base.reduce((a,b)=>a+b,0)/base.length;setStatus('Prueba de presencia: mueve ligeramente la cabeza hacia un lado…','warn',48);let moved=false,deadline=Date.now()+14000;while(Date.now()<deadline){const d=await detectOne(),delta=Math.abs(yawRatio(d.landmarks)-baseline);if(delta>.13){moved=true;break}await wait(180)}if(!moved)throw Error('No se detectó movimiento de presencia. Mueve ligeramente la cabeza y vuelve a intentar.');setStatus('Muy bien. Vuelve a mirar al frente…','warn',60);deadline=Date.now()+9000;while(Date.now()<deadline){const d=await detectOne(),delta=Math.abs(yawRatio(d.landmarks)-baseline);if(delta<.07)return true;await wait(170)}throw Error('No se pudo completar la prueba de presencia. Vuelve al centro y reintenta.')}
+function averageDescriptors(list){const out=new Array(128).fill(0);list.forEach(d=>d.forEach((v,i)=>out[i]+=v));return out.map(v=>v/list.length)}
+function photo(){const v=$('video'),c=$('canvas'),max=800,ratio=Math.min(1,max/v.videoWidth);c.width=Math.round(v.videoWidth*ratio);c.height=Math.round(v.videoHeight*ratio);const ctx=c.getContext('2d');ctx.drawImage(v,0,0,c.width,c.height);return c.toDataURL('image/jpeg',.82)}
+async function run(){if(busy)return;busy=true;$('permit').disabled=true;try{await loadModels();setStatus('El navegador solicitará cámara y ubicación. Selecciona Permitir.','warn',22);stream=await openCamera();$('video').srcObject=stream;await $('video').play();gpsData=await getGps();$('gpsState').textContent='⌖ GPS listo · precisión aprox. '+Math.round(gpsData.precision)+' m';setStatus('Permisos concedidos. Preparando reconocimiento…','ok',30);await liveness();const count=MODE==='enroll'?3:2,samples=[];setStatus(MODE==='enroll'?'Registrando referencia facial…':'Comparando rasgos faciales…','warn',72);for(let i=0;i<count;i++){const d=await detectOne();samples.push(Array.from(d.descriptor));$('progress').style.width=(72+((i+1)/count)*20)+'%';await wait(220)}const descriptor=averageDescriptors(samples),imageBase64=photo();setStatus('Verificación completada. Enviando al sistema…','ok',96);if(!window.opener)throw Error('No se encontró la ventana del sistema. Vuelve a abrir la biometría desde HERRACOM.');window.opener.postMessage({type:'HERRACOM_RRHH_BIOMETRIA',mode:MODE,descriptor,imageBase64,gps:gpsData,liveness:true,ts:Date.now()},TARGET_ORIGIN);setStatus(MODE==='enroll'?'Rostro registrado y enviado al sistema.':'Rostro y GPS enviados para validación.','ok',100);setTimeout(()=>window.close(),900)}catch(e){setStatus(e.message||String(e),'bad',0);$('permit').textContent='Reintentar permisos / biometría';$('permit').disabled=false;stop()}finally{busy=false}}
+function stop(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}$('video').srcObject=null}
+$('permit').onclick=run;$('cancel').onclick=()=>{stop();window.close()};window.addEventListener('beforeunload',stop);
+</script>
+</body>
+</html>
